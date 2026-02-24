@@ -30,12 +30,13 @@ body {
   background: var(--bg);
   color: var(--text);
   -webkit-tap-highlight-color: transparent;
-  overflow-x: hidden;
 }
 
-/* Prevent bounce on iOS WebView */
+/* Allow vertical scrolling, prevent horizontal scroll without blocking WebView touch */
 body {
-  overscroll-behavior: none;
+  overflow-x: clip;
+  overflow-y: auto;
+  overscroll-behavior-x: none;
 }
 
 /* Face oval overlay */

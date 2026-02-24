@@ -2,7 +2,8 @@
 
 import * as faceapi from '@vladmandic/face-api';
 
-const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model';
+// Models are served from /public/models — faster than CDN, works in WebView
+const MODEL_URL = '/models';
 
 let modelsLoaded = false;
 let loadingPromise: Promise<void> | null = null;
