@@ -79,12 +79,34 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
                 isCheckIn ? 'Check-in is only allowed before college start time' : 'Check-out only after college end time'
             );
 
-            // Geofence (non-blocking if location unavailable)
-            const geo = await validateGeofence(college);
-            if (!geo.valid) throw new Error(geo.message);
+            // Run heavy tasks concurrently to reduce perceived delay
+            const geoPromise = validateGeofence(college);
+            const embeddingPromise = getFaceEmbedding(videoRef.current);
+            const coordsPromise = new Promise<{ lat?: number, lng?: number }>(async (resolve) => {
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const latParam = params.get('lat');
+                    const lngParam = params.get('lng');
+                    if (latParam && lngParam) {
+                        return resolve({ lat: parseFloat(latParam), lng: parseFloat(lngParam) });
+                    }
+                    if (navigator.geolocation) {
+                        const pos = await new Promise<GeolocationPosition>((res, rej) =>
+                            navigator.geolocation.getCurrentPosition(res, rej, {
+                                enableHighAccuracy: true,
+                                timeout: 7000,
+                                maximumAge: 0
+                            })
+                        );
+                        return resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                    }
+                } catch (err) { }
+                resolve({});
+            });
 
-            // Get face embedding
-            const embedding = await getFaceEmbedding(videoRef.current);
+            const [geo, embedding, coords] = await Promise.all([geoPromise, embeddingPromise, coordsPromise]);
+
+            if (!geo.valid) throw new Error(geo.message);
             if (!embedding) throw new Error('No face detected. Centre your face and try again.');
 
             const stored = userProfile.faceEmbedding;
@@ -96,23 +118,13 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
             }
             const confidence = Math.max(0, 1 - dist / FACE_MATCH_THRESHOLD);
 
-            // Location (optional)
-            let latitude: number | undefined, longitude: number | undefined;
-            try {
-                const pos = await new Promise<GeolocationPosition>((res, rej) =>
-                    navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 })
-                );
-                latitude = pos.coords.latitude;
-                longitude = pos.coords.longitude;
-            } catch (_) { }
-
             await markAttendance({
                 userId: userProfile.uid,
                 userName: userProfile.name,
                 type: isCheckIn ? 'check_in' : 'check_out',
                 confidence,
-                latitude,
-                longitude,
+                latitude: coords.lat ?? geo.latitude,
+                longitude: coords.lng ?? geo.longitude,
             });
 
             stopCamera();

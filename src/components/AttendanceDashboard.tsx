@@ -118,12 +118,19 @@ export default function AttendanceDashboard({ profile }: Props) {
     // Flatten events for history display
     const flatEvents = history
         .flatMap((r) => {
-            const evs: { type: 'check_in' | 'check_out'; time: string }[] = [];
+            const evs: { type: 'check_in' | 'check_out'; time: string; latitude?: number; longitude?: number }[] = [];
             if (r.events?.length) {
-                r.events.forEach((e: AttendanceEvent) => evs.push({ type: e.type, time: e.time }));
+                r.events.forEach((e: AttendanceEvent) => evs.push({
+                    type: e.type,
+                    time: e.time,
+                    latitude: e.latitude,
+                    longitude: e.longitude
+                }));
             } else {
-                if (r.checkInTime) evs.push({ type: 'check_in', time: r.checkInTime });
-                if (r.checkoutTime) evs.push({ type: 'check_out', time: r.checkoutTime });
+                const lat = (r as any).latitude;
+                const lng = (r as any).longitude;
+                if (r.checkInTime) evs.push({ type: 'check_in', time: r.checkInTime, latitude: lat, longitude: lng });
+                if (r.checkoutTime) evs.push({ type: 'check_out', time: r.checkoutTime, latitude: lat, longitude: lng });
             }
             return evs;
         })
@@ -150,7 +157,7 @@ export default function AttendanceDashboard({ profile }: Props) {
                 />
             )}
 
-            <div style={{ minHeight: '100dvh', background: '#f8f8f8', paddingBottom: 32 }}>
+            <div style={{ height: '100dvh', background: '#f8f8f8', display: 'flex', flexDirection: 'column' }}>
 
                 {/* Loading state */}
                 {loading ? (
@@ -160,7 +167,7 @@ export default function AttendanceDashboard({ profile }: Props) {
                         ))}
                     </div>
                 ) : (
-                    <div style={{ padding: '20px 20px 0' }}>
+                    <div style={{ padding: '20px 20px 0', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
                         {/* Status Card */}
                         <Card style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -297,47 +304,56 @@ export default function AttendanceDashboard({ profile }: Props) {
                         </div>
 
                         {/* History records */}
-                        {historyLoading ? (
-                            <Card style={{ textAlign: 'center', padding: '40px 20px' }}>
-                                <div style={{ width: 24, height: 24, borderRadius: '50%', border: '2px solid #e0e0e0', borderTop: `2px solid ${PRIMARY}`, margin: '0 auto', animation: 'spin 0.8s linear infinite' }} />
-                            </Card>
-                        ) : flatEvents.length === 0 ? (
-                            <Card style={{ textAlign: 'center', padding: '40px 20px' }}>
-                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block', margin: '0 auto 12px' }}>
-                                    <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
-                                </svg>
-                                <p style={{ margin: '0 0 6px', fontWeight: 700, fontSize: 15, color: '#000' }}>No attendance records</p>
-                                <p style={{ margin: 0, fontSize: 13, color: '#666' }}>
-                                    {historyFilter === 'all' ? 'Attendance records will appear here once marked' : `No ${historyFilter.replace('_', ' ')} records found`}
-                                </p>
-                            </Card>
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                                {flatEvents.map((ev, i) => {
-                                    const isIn = ev.type === 'check_in';
-                                    const d = new Date(ev.time);
-                                    const dateStr = d.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-                                    const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-                                    return (
-                                        <Card key={i} style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                                            <div style={{
-                                                width: 48, height: 48, borderRadius: 10, flexShrink: 0,
-                                                background: isIn ? '#E8F5E9' : '#FFF3E0',
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                fontSize: 12, fontWeight: 700,
-                                                color: isIn ? '#2e7d32' : '#e65100',
-                                            }}>
-                                                {isIn ? 'IN' : 'OUT'}
-                                            </div>
-                                            <div>
-                                                <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#000' }}>{dateStr}</p>
-                                                <p style={{ margin: '2px 0 0', fontSize: 13, color: '#666' }}>{timeStr}</p>
-                                            </div>
-                                        </Card>
-                                    );
-                                })}
-                            </div>
-                        )}
+                        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 32, paddingRight: 4, marginRight: -4, display: 'flex', flexDirection: 'column' }}>
+                            {historyLoading ? (
+                                <Card style={{ textAlign: 'center', padding: '40px 20px' }}>
+                                    <div style={{ width: 24, height: 24, borderRadius: '50%', border: '2px solid #e0e0e0', borderTop: `2px solid ${PRIMARY}`, margin: '0 auto', animation: 'spin 0.8s linear infinite' }} />
+                                </Card>
+                            ) : flatEvents.length === 0 ? (
+                                <Card style={{ textAlign: 'center', padding: '40px 20px' }}>
+                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block', margin: '0 auto 12px' }}>
+                                        <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                                    </svg>
+                                    <p style={{ margin: '0 0 6px', fontWeight: 700, fontSize: 15, color: '#000' }}>No attendance records</p>
+                                    <p style={{ margin: 0, fontSize: 13, color: '#666' }}>
+                                        {historyFilter === 'all' ? 'Attendance records will appear here once marked' : `No ${historyFilter.replace('_', ' ')} records found`}
+                                    </p>
+                                </Card>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    {flatEvents.map((ev, i) => {
+                                        const isIn = ev.type === 'check_in';
+                                        const d = new Date(ev.time);
+                                        const dateStr = d.toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+                                        const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                                        return (
+                                            <Card key={i} style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                <div style={{
+                                                    width: 48, height: 48, borderRadius: 10, flexShrink: 0,
+                                                    background: isIn ? '#E8F5E9' : '#FFF3E0',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    fontSize: 12, fontWeight: 700,
+                                                    color: isIn ? '#2e7d32' : '#e65100',
+                                                }}>
+                                                    {isIn ? 'IN' : 'OUT'}
+                                                </div>
+                                                <div style={{ flex: 1 }}>
+                                                    <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#000' }}>{dateStr}</p>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+                                                        <p style={{ margin: 0, fontSize: 13, color: '#666' }}>{timeStr}</p>
+                                                        {ev.latitude != null && ev.longitude != null && (
+                                                            <span style={{ fontSize: 10, color: '#666', background: '#e0e0e0', padding: '2px 6px', borderRadius: 4, fontWeight: 500 }}>
+                                                                {ev.latitude.toFixed(4)}, {ev.longitude.toFixed(4)}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </Card>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>

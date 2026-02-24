@@ -3,30 +3,41 @@
 export const dynamic = 'force-dynamic';
 
 import { useEffect, useState } from 'react';
-import { getUserProfile, UserProfile } from '@/lib/attendance';
+import { getUserProfile, getCollegeDetails, UserProfile, CollegeDetails } from '@/lib/attendance';
 import dynamic_ from 'next/dynamic';
 
 const AttendanceDashboard = dynamic_(() => import('@/components/AttendanceDashboard'), { ssr: false });
+const FaceRegistration = dynamic_(() => import('@/components/FaceRegistration'), { ssr: false });
+const MarkAttendance = dynamic_(() => import('@/components/MarkAttendance'), { ssr: false });
 
 export default function Home() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [college, setCollege] = useState<CollegeDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [flowType, setFlowType] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const uid = params.get('uid');
+    const type = params.get('type');
+    setFlowType(type);
+
     if (!uid) {
       setError('No user ID provided. Please open this page from the app.');
       setLoading(false);
       return;
     }
     getUserProfile(uid)
-      .then((p) => {
+      .then(async (p) => {
         if (!p) {
           setError('User not found.');
         } else {
           setProfile(p);
+          if (p.collegeId) {
+            const c = await getCollegeDetails(p.collegeId);
+            setCollege(c);
+          }
         }
       })
       .catch((e) => setError(e.message))
@@ -57,5 +68,48 @@ export default function Home() {
     );
   }
 
+  // If a specific flow type is requested, render only that component
+  if (flowType === 'register') {
+    return (
+      <FaceRegistration
+        userId={profile!.uid}
+        userName={profile!.name}
+        onComplete={() => {
+          // Notify Flutter that registration succeeded
+          if (window.FlutterChannel) window.FlutterChannel.postMessage('success');
+        }}
+        onCancel={() => {
+          if (window.FlutterChannel) window.FlutterChannel.postMessage('cancel');
+        }}
+      />
+    );
+  }
+
+  if (flowType === 'checkin' || flowType === 'checkout') {
+    return (
+      <MarkAttendance
+        userProfile={profile!}
+        college={college}
+        isCheckIn={flowType === 'checkin'}
+        onSuccess={() => {
+          if (window.FlutterChannel) window.FlutterChannel.postMessage('success');
+        }}
+        onCancel={() => {
+          if (window.FlutterChannel) window.FlutterChannel.postMessage('cancel');
+        }}
+      />
+    );
+  }
+
+  // Fallback: render the entire dashboard
   return <AttendanceDashboard profile={profile!} />;
+}
+
+// Add TypeScript definition for the Flutter JavascriptChannel
+declare global {
+  interface Window {
+    FlutterChannel?: {
+      postMessage: (message: string) => void;
+    };
+  }
 }

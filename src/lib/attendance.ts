@@ -60,6 +60,22 @@ export interface AttendanceRecord {
     checkoutTime?: string;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+export function getLocalISOString(): string {
+    const tzoffset = (new Date()).getTimezoneOffset() * 60000; // offset in milliseconds
+    const localISOTime = (new Date(Date.now() - tzoffset)).toISOString().slice(0, -1);
+
+    // Calculate timezone offset string (e.g., +05:30)
+    const offset = (new Date()).getTimezoneOffset();
+    const absOffset = Math.abs(offset);
+    const sign = offset > 0 ? "-" : "+"; // getTimezoneOffset returns positive for behind UTC
+    const hours = String(Math.floor(absOffset / 60)).padStart(2, "0");
+    const minutes = String(absOffset % 60).padStart(2, "0");
+
+    return localISOTime + sign + hours + ":" + minutes;
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export async function signIn(email: string, password: string): Promise<UserProfile> {
@@ -124,7 +140,7 @@ export async function getCollegeDetails(collegeId: string): Promise<CollegeDetai
 // ─── Attendance ────────────────────────────────────────────────────────────────
 
 export async function getTodayAttendanceRecord(userId: string): Promise<{ id: string; data: AttendanceRecord } | null> {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = getLocalISOString().split('T')[0]; // YYYY-MM-DD in local time
     const q = query(collection(db, 'attendance'), where('userId', '==', userId));
     const snap = await getDocs(q);
     for (const d of snap.docs) {
@@ -172,8 +188,7 @@ export async function markAttendance({
     latitude?: number;
     longitude?: number;
 }): Promise<void> {
-    const now = new Date();
-    const timestamp = now.toISOString();
+    const timestamp = getLocalISOString();
     const today = timestamp.split('T')[0];
 
     const newEvent: AttendanceEvent = {
@@ -273,9 +288,36 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 
 export async function validateGeofence(
     college: CollegeDetails | null
-): Promise<{ valid: boolean; message: string; distance?: number }> {
+): Promise<{ valid: boolean; message: string; distance?: number; latitude?: number; longitude?: number }> {
     if (!college?.latitude || !college?.longitude) {
         return { valid: true, message: 'College location not configured' };
+    }
+
+    if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const latParam = params.get('lat');
+        const lngParam = params.get('lng');
+        if (latParam && lngParam) {
+            const latNum = parseFloat(latParam);
+            const lngNum = parseFloat(lngParam);
+            const dist = haversineKm(
+                latNum,
+                lngNum,
+                college.latitude!,
+                college.longitude!
+            );
+            const max = college.maxDistance ?? 1.0;
+            if (dist > max) {
+                return {
+                    valid: false,
+                    message: `You are ${dist.toFixed(2)} km away from college. Max allowed: ${max.toFixed(1)} km.`,
+                    distance: dist,
+                    latitude: latNum,
+                    longitude: lngNum,
+                };
+            }
+            return { valid: true, message: 'Location verified (from URL)', latitude: latNum, longitude: lngNum };
+        }
     }
 
     return new Promise((resolve) => {
@@ -307,7 +349,7 @@ export async function validateGeofence(
                 // Location unavailable (WebView restriction, GPS off, etc.) — allow attendance
                 resolve({ valid: true, message: 'Location unavailable — skipping geofence check' });
             },
-            { timeout: 8000, maximumAge: 60000 }
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
         );
     });
 }
