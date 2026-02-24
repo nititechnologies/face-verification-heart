@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #004d40;
+  --primary-light: #A0D9D9;
+  --primary-dark: #00251a;
+  --bg: #f8f8f8;
+  --bg-white: #ffffff;
+  --text: #000000;
+  --text-secondary: #666666;
+  --text-light: #999999;
+  --border: #e0e0e0;
+  --success: #4CAF50;
+  --success-light: #E8F5E9;
+  --warning: #FF9800;
+  --warning-light: #FFF3E0;
+  --error: #FF0000;
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+/* Prevent bounce on iOS WebView */
+body {
+  overscroll-behavior: none;
+}
+
+/* Face oval overlay */
+.face-oval {
+  width: 200px;
+  height: 270px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.55);
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -55%);
+  pointer-events: none;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.face-oval.detected {
+  border-color: rgba(255, 255, 255, 0.85);
+}
+
+.face-oval.blinking {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.3);
+}
+
+.face-oval.verified {
+  border-color: #4ade80;
+  box-shadow: 0 0 0 5px rgba(74, 222, 128, 0.25);
+}
