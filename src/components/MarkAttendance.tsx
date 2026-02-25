@@ -23,11 +23,14 @@ interface Props {
 
 export default function MarkAttendance({ userProfile, college, isCheckIn, onSuccess, onCancel }: Props) {
     const videoRef = useRef<HTMLVideoElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
 
     const [step, setStep] = useState<Step>('loading');
     const [error, setError] = useState('');
     const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+    const [showFlash, setShowFlash] = useState(false);
+    const [statusText, setStatusText] = useState('');
 
     const stopCamera = useCallback(() => {
         streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -69,8 +72,33 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
 
     const handleCapture = useCallback(async () => {
         if (!videoRef.current) return;
+
+        // ── INSTANT: freeze frame + flash ──
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        if (canvas) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                if (facingMode === 'user') {
+                    ctx.translate(canvas.width, 0);
+                    ctx.scale(-1, 1);
+                }
+                ctx.drawImage(video, 0, 0);
+            }
+        }
+
+        // Flash + processing — all synchronous state updates batched by React
+        setShowFlash(true);
         setStep('processing');
         setError('');
+        setStatusText('Verifying...');
+        setTimeout(() => setShowFlash(false), 150);
+
+        // CRITICAL: yield to browser so it paints the frozen frame + spinner
+        // before the heavy face detection blocks the main thread
+        await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 
         try {
             // Time check
@@ -79,32 +107,11 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
                 isCheckIn ? 'Check-in is only allowed before college start time' : 'Check-out only after college end time'
             );
 
-            // Run heavy tasks concurrently to reduce perceived delay
+            // Run face embedding on frozen canvas AND geofence concurrently
+            const embeddingPromise = getFaceEmbedding(canvas!);
             const geoPromise = validateGeofence(college);
-            const embeddingPromise = getFaceEmbedding(videoRef.current);
-            const coordsPromise = new Promise<{ lat?: number, lng?: number }>(async (resolve) => {
-                try {
-                    const params = new URLSearchParams(window.location.search);
-                    const latParam = params.get('lat');
-                    const lngParam = params.get('lng');
-                    if (latParam && lngParam) {
-                        return resolve({ lat: parseFloat(latParam), lng: parseFloat(lngParam) });
-                    }
-                    if (navigator.geolocation) {
-                        const pos = await new Promise<GeolocationPosition>((res, rej) =>
-                            navigator.geolocation.getCurrentPosition(res, rej, {
-                                enableHighAccuracy: true,
-                                timeout: 7000,
-                                maximumAge: 0
-                            })
-                        );
-                        return resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                    }
-                } catch (err) { }
-                resolve({});
-            });
 
-            const [geo, embedding, coords] = await Promise.all([geoPromise, embeddingPromise, coordsPromise]);
+            const [embedding, geo] = await Promise.all([embeddingPromise, geoPromise]);
 
             if (!geo.valid) throw new Error(geo.message);
             if (!embedding) throw new Error('No face detected. Centre your face and try again.');
@@ -118,13 +125,17 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
             }
             const confidence = Math.max(0, 1 - dist / FACE_MATCH_THRESHOLD);
 
+            const latitude = geo.latitude;
+            const longitude = geo.longitude;
+
+            setStatusText('Saving...');
             await markAttendance({
                 userId: userProfile.uid,
                 userName: userProfile.name,
                 type: isCheckIn ? 'check_in' : 'check_out',
                 confidence,
-                latitude: coords.lat ?? geo.latitude,
-                longitude: coords.lng ?? geo.longitude,
+                latitude,
+                longitude,
             });
 
             stopCamera();
@@ -134,27 +145,66 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
             setError(err instanceof Error ? err.message : 'Something went wrong');
             setStep('ready');
         }
-    }, [college, isCheckIn, userProfile, stopCamera, onSuccess]);
+    }, [college, isCheckIn, userProfile, stopCamera, onSuccess, facingMode]);
 
     const PRIMARY = '#004d40';
+    const isFrozen = step === 'processing' || step === 'done';
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: '#000', display: 'flex', flexDirection: 'column' }}>
-            {/* Camera */}
-            <div style={{ position: 'relative', flex: 1 }}>
+
+            {/* Camera / Frozen frame */}
+            <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
+                {/* Live video (hidden when frozen) */}
                 <video
                     ref={videoRef}
                     autoPlay
                     playsInline
                     muted
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
+                    style={{
+                        width: '100%', height: '100%', objectFit: 'cover',
+                        transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
+                        display: isFrozen ? 'none' : 'block',
+                    }}
                 />
 
-                {/* Oval guide */}
-                <div className="face-oval detected" />
+                {/* Canvas — drawn to on capture, shown as frozen frame */}
+                <canvas
+                    ref={canvasRef}
+                    style={{
+                        display: isFrozen ? 'block' : 'none',
+                        width: '100%', height: '100%', objectFit: 'cover',
+                    }}
+                />
 
-                {/* Check In / Out badge + switch camera */}
-                <div style={{ position: 'absolute', top: 16, left: 0, right: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, paddingRight: 52 }}>
+                {/* Shutter flash */}
+                {showFlash && (
+                    <div style={{
+                        position: 'absolute', inset: 0,
+                        background: '#fff',
+                        animation: 'flashFade 0.15s ease-out forwards',
+                        zIndex: 10,
+                    }} />
+                )}
+
+                {/* Oval guide (only when live) */}
+                {!isFrozen && <div className="face-oval detected" />}
+
+                {/* Close (X) button */}
+                {(step === 'ready' || step === 'loading') && (
+                    <button
+                        onClick={() => { stopCamera(); onCancel(); }}
+                        style={{ position: 'absolute', top: 12, left: 12, width: 38, height: 38, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5 }}
+                        title="Close"
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                )}
+
+                {/* Check In / Out badge */}
+                <div style={{ position: 'absolute', top: 16, left: 0, right: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, paddingLeft: 52, paddingRight: 52 }}>
                     <div style={{
                         background: isCheckIn ? 'rgba(0,77,64,0.85)' : 'rgba(183,28,28,0.85)',
                         borderRadius: 999, padding: '6px 18px',
@@ -163,8 +213,9 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
                         {isCheckIn ? '↗ Check In' : '↙ Check Out'}
                     </div>
                 </div>
+
                 {/* Switch camera button */}
-                {step !== 'processing' && step !== 'done' && (
+                {step === 'ready' && (
                     <button
                         onClick={switchCamera}
                         style={{ position: 'absolute', top: 12, right: 12, width: 38, height: 38, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -184,39 +235,49 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
                     </div>
                 )}
 
-                {/* Processing overlay */}
+                {/* Processing overlay (on top of frozen frame) */}
                 {step === 'processing' && (
-                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-                        <div style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid rgba(255,255,255,0.3)', borderTop: `3px solid ${PRIMARY}`, animation: 'spin 0.8s linear infinite' }} />
-                        <p style={{ color: '#fff', fontSize: 15, fontWeight: 600, margin: 0 }}>Verifying face...</p>
+                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+                        <div style={{ width: 44, height: 44, borderRadius: '50%', border: '3px solid rgba(255,255,255,0.2)', borderTop: `3px solid ${PRIMARY}`, animation: 'spin 0.6s linear infinite' }} />
+                        <p style={{ color: '#fff', fontSize: 15, fontWeight: 600, margin: 0 }}>{statusText}</p>
                     </div>
                 )}
 
                 {/* Done overlay */}
                 {step === 'done' && (
-                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-                        <div style={{ width: 72, height: 72, borderRadius: '50%', background: '#4CAF50', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+                        <div style={{
+                            width: 80, height: 80, borderRadius: '50%', background: '#4CAF50',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            animation: 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
+                        }}>
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                                 <polyline points="20 6 9 17 4 12" />
                             </svg>
                         </div>
-                        <p style={{ color: '#fff', fontSize: 16, fontWeight: 700, margin: 0 }}>
+                        <p style={{ color: '#fff', fontSize: 17, fontWeight: 700, margin: 0 }}>
                             {isCheckIn ? 'Checked In!' : 'Checked Out!'}
                         </p>
                     </div>
                 )}
             </div>
 
-            {/* Error */}
-            {error && (
-                <div style={{ background: '#b71c1c', color: '#fff', fontSize: 13, textAlign: 'center', padding: '10px 16px' }}>
-                    {error}
-                </div>
-            )}
+            {/* Bottom bar — always rendered for constant height */}
+            <div style={{ background: '#000', padding: '16px 20px 36px', display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+                {/* Floating error pill above button */}
+                {error && (
+                    <div style={{
+                        position: 'absolute', bottom: '100%', left: 16, right: 16, marginBottom: 8,
+                        background: 'rgba(183,28,28,0.92)', backdropFilter: 'blur(8px)',
+                        color: '#fff', fontSize: 13, textAlign: 'center',
+                        padding: '10px 16px', borderRadius: 12,
+                        animation: 'slideUp 0.2s ease-out',
+                    }}>
+                        {error}
+                    </div>
+                )}
 
-            {/* Bottom bar — Capture + Cancel */}
-            {step !== 'processing' && step !== 'done' && (
-                <div style={{ background: '#000', padding: '16px 20px 36px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {(step === 'ready' || step === 'loading') ? (
                     <button
                         onClick={handleCapture}
                         disabled={step === 'loading'}
@@ -226,7 +287,10 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
                             color: '#fff', fontWeight: 700, fontSize: 16,
                             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                             cursor: step === 'loading' ? 'not-allowed' : 'pointer',
+                            transition: 'transform 0.1s',
                         }}
+                        onPointerDown={(e) => (e.currentTarget.style.transform = 'scale(0.97)')}
+                        onPointerUp={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                     >
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -234,19 +298,18 @@ export default function MarkAttendance({ userProfile, college, isCheckIn, onSucc
                         </svg>
                         Capture
                     </button>
-                    <button
-                        onClick={() => { stopCamera(); onCancel(); }}
-                        style={{
-                            background: 'transparent', border: 'none', color: '#aaa',
-                            fontSize: 15, fontWeight: 500, cursor: 'pointer', padding: '8px',
-                        }}
-                    >
-                        Cancel
-                    </button>
-                </div>
-            )}
+                ) : (
+                    /* Invisible spacer to keep same height during processing/done */
+                    <div style={{ width: '100%', padding: '15px 0', visibility: 'hidden', fontSize: 16, fontWeight: 700 }}>&nbsp;</div>
+                )}
+            </div>
 
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            <style>{`
+                @keyframes spin { to { transform: rotate(360deg); } }
+                @keyframes flashFade { from { opacity: 1; } to { opacity: 0; } }
+                @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+                @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
         </div>
     );
 }

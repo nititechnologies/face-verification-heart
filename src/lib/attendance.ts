@@ -63,17 +63,8 @@ export interface AttendanceRecord {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function getLocalISOString(): string {
-    const tzoffset = (new Date()).getTimezoneOffset() * 60000; // offset in milliseconds
-    const localISOTime = (new Date(Date.now() - tzoffset)).toISOString().slice(0, -1);
-
-    // Calculate timezone offset string (e.g., +05:30)
-    const offset = (new Date()).getTimezoneOffset();
-    const absOffset = Math.abs(offset);
-    const sign = offset > 0 ? "-" : "+"; // getTimezoneOffset returns positive for behind UTC
-    const hours = String(Math.floor(absOffset / 60)).padStart(2, "0");
-    const minutes = String(absOffset % 60).padStart(2, "0");
-
-    return localISOTime + sign + hours + ":" + minutes;
+    const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+    return (new Date(Date.now() - tzoffset)).toISOString().slice(0, -1);
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
